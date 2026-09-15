@@ -1,7 +1,24 @@
 -- Minimal policy model for scheduled Databricks App lifecycle management.
--- Run in the catalog/schema where the policy should live.
+--
+-- Configuration: change these two values before running the script.
+-- The script intentionally does NOT create the catalog or schema. USE CATALOG / USE SCHEMA
+-- fail immediately if either target does not exist or is not accessible.
 
-CREATE TABLE IF NOT EXISTS platform.app_schedule (
+DECLARE OR REPLACE VARIABLE target_catalog STRING DEFAULT 'main';
+DECLARE OR REPLACE VARIABLE target_schema  STRING DEFAULT 'platform';
+
+USE CATALOG IDENTIFIER(target_catalog);
+USE SCHEMA IDENTIFIER(target_schema);
+
+-- Confirm the resolved namespace before creating objects.
+SELECT current_catalog() AS catalog, current_schema() AS schema;
+
+-- Databricks does not support DDL (CREATE TABLE / CREATE VIEW) inside
+-- BEGIN ATOMIC or BEGIN TRANSACTION. Each DDL statement below is therefore
+-- executed as its own atomic statement, which is the strongest supported
+-- transactional behavior for this setup script.
+
+CREATE TABLE IF NOT EXISTS app_schedule (
   workspace_id STRING NOT NULL COMMENT 'Databricks workspace ID',
   app_id       STRING NOT NULL COMMENT 'Stable Databricks App ID',
   timezone     STRING NOT NULL COMMENT 'IANA timezone, e.g. Europe/Stockholm',
@@ -15,7 +32,7 @@ USING DELTA
 COMMENT 'Owner-approved running schedules for Databricks Apps. Absence of a row means unmanaged.';
 
 -- The UI consumes a stable relational shape while app_metadata can evolve independently.
-CREATE OR REPLACE VIEW platform.app_schedule_ui AS
+CREATE OR REPLACE VIEW app_schedule_ui AS
 SELECT
   workspace_id,
   app_id,
@@ -28,12 +45,15 @@ SELECT
   stop_time,
   weekdays,
   updated_at
-FROM platform.app_schedule;
+FROM app_schedule;
 
 -- Example owner preference. The UI should MERGE rows using (workspace_id, app_id).
 -- No row = the automation must not touch the App.
 --
--- MERGE INTO platform.app_schedule AS t
+-- DML operations such as MERGE can be placed in BEGIN ATOMIC ... END when a
+-- multi-statement transaction is needed and the target table has Catalog commits enabled.
+--
+-- MERGE INTO app_schedule AS t
 -- USING (
 --   SELECT
 --     '<workspace-id>' AS workspace_id,
