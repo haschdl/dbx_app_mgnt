@@ -2,8 +2,7 @@
 # MAGIC %md
 # MAGIC # Databricks Apps Scheduler
 # MAGIC
-# MAGIC Reconciles Databricks App compute state against owner-approved schedules stored in
-# MAGIC `platform.app_schedule`.
+# MAGIC Reconciles Databricks App compute state against owner-approved schedules.
 # MAGIC
 # MAGIC **Safety contract**
 # MAGIC - No schedule row = unmanaged App; this notebook will not touch it.
@@ -22,16 +21,50 @@ import json
 
 from databricks.sdk import WorkspaceClient
 
-w = WorkspaceClient()
-
 # COMMAND ----------
 # DBTITLE 1,Configuration
 
-SCHEDULE_TABLE = "platform.app_schedule"
+# Change these two values for the Unity Catalog location that stores scheduling policy.
+CATALOG = "main"
+SCHEMA = "platform"
+SCHEDULE_TABLE_NAME = "app_schedule"
+
+
+def quote_identifier(value: str) -> str:
+    """Quote a Spark SQL identifier safely."""
+    return f"`{value.replace('`', '``')}`"
+
+
+w = WorkspaceClient()
 workspace_id = str(w.get_workspace_id())
 
+# COMMAND ----------
+# DBTITLE 1,Validate configuration
+
+catalog_names = {row["catalog"] for row in spark.sql("SHOW CATALOGS").collect()}
+if CATALOG not in catalog_names:
+    raise RuntimeError(
+        f"Configured catalog '{CATALOG}' does not exist or is not visible to the job identity."
+    )
+
+schema_rows = spark.sql(f"SHOW SCHEMAS IN {quote_identifier(CATALOG)}").collect()
+schema_names = {row["databaseName"] for row in schema_rows}
+if SCHEMA not in schema_names:
+    raise RuntimeError(
+        f"Configured schema '{CATALOG}.{SCHEMA}' does not exist or is not visible to the job identity."
+    )
+
+SCHEDULE_TABLE = ".".join(
+    [
+        quote_identifier(CATALOG),
+        quote_identifier(SCHEMA),
+        quote_identifier(SCHEDULE_TABLE_NAME),
+    ]
+)
+
 print(f"Workspace ID: {workspace_id}")
-print(f"Schedule table: {SCHEDULE_TABLE}")
+print(f"Policy location: {CATALOG}.{SCHEMA}")
+print(f"Schedule table: {CATALOG}.{SCHEMA}.{SCHEDULE_TABLE_NAME}")
 
 # COMMAND ----------
 # DBTITLE 1,Load managed schedules
