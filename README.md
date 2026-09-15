@@ -9,11 +9,25 @@ The goal is deliberately narrow: App owners opt in to a running schedule, and a 
 - `setup.sql` — creates the minimal Delta policy table and a relational UI view.
 - `apps_scheduler.py` — Databricks notebook source that reconciles Apps in the current workspace.
 
+## Scheduler configuration
+
+At the top of `apps_scheduler.py`, configure the Unity Catalog location used for scheduling policy:
+
+```python
+CATALOG = "main"
+SCHEMA = "platform"
+SCHEDULE_TABLE_NAME = "app_schedule"
+```
+
+The scheduler validates `CATALOG` and `SCHEMA` before it reads policy or changes any App state. If either does not exist, or is not visible to the Job execution identity, the notebook raises an exception and stops immediately.
+
+The scheduler never creates catalogs or schemas. Provision them separately, then point every workspace Job at the intended shared policy location.
+
 ## Safety model
 
 Scheduling is opt-in:
 
-- **No row in `platform.app_schedule` means unmanaged.** The automation does not touch that App.
+- **No row in the configured `app_schedule` table means unmanaged.** The automation does not touch that App.
 - The owner is responsible for confirming that the App is restart-safe before creating a schedule.
 - Stopping an App releases its compute. Runtime-local files and in-memory state are not preserved across restart.
 - Starting an App starts its **last active deployment**. The scheduler does not redeploy from the original source location.
@@ -23,7 +37,7 @@ Databricks deployments use stable deployment artifacts, so lifecycle `start` is 
 ## Minimal data model
 
 ```text
-platform.app_schedule
+<CATALOG>.<SCHEMA>.app_schedule
 
 workspace_id   STRING       stable workspace identity
 app_id         STRING       stable App identity
@@ -41,7 +55,7 @@ The schedule fields are intentionally typed and small. Descriptive fields such a
 
 ### UI view
 
-`platform.app_schedule_ui` extracts the fields needed by a simple owner-facing UI:
+`<CATALOG>.<SCHEMA>.app_schedule_ui` extracts the fields needed by a simple owner-facing UI:
 
 - workspace ID
 - App ID
@@ -113,28 +127,26 @@ Each Job:
 
 1. creates a notebook-native `WorkspaceClient()`;
 2. obtains its own workspace ID with `w.get_workspace_id()`;
-3. reads only policy rows for that workspace;
-4. lists Apps through `w.apps.list()`;
-5. matches Apps by `app_id`;
-6. starts or stops only managed Apps;
-7. refreshes descriptive `app_metadata` for those managed Apps;
-8. fails the run if any managed App could not be reconciled.
+3. validates the configured catalog and schema;
+4. reads only policy rows for that workspace;
+5. lists Apps through `w.apps.list()`;
+6. matches Apps by `app_id`;
+7. starts or stops only managed Apps;
+8. refreshes descriptive `app_metadata` for those managed Apps;
+9. fails the run if any managed App could not be reconciled.
 
-All workspace Jobs can read the same Unity Catalog policy table where the catalog is shared/accessible across those workspaces.
+All workspace Jobs can read the same Unity Catalog policy table where the configured catalog is shared/accessible across those workspaces.
 
 ## Setup
 
-Run `setup.sql` in the desired catalog. The examples use schema `platform`:
-
-```sql
-CREATE SCHEMA IF NOT EXISTS platform;
-```
+Create the target catalog/schema separately, then run `setup.sql` in that location. The SQL example currently uses schema `platform`; adjust it to match the values configured in `apps_scheduler.py`.
 
 Then import or sync `apps_scheduler.py` into each target workspace and configure it as a scheduled Databricks Job task.
 
 The Job execution identity needs:
 
-- `SELECT` and `MODIFY` on `platform.app_schedule` (metadata refresh uses `MERGE`);
+- visibility/use permissions on the configured catalog and schema;
+- `SELECT` and `MODIFY` on the schedule table (metadata refresh uses `MERGE`);
 - permission to list the target Apps;
 - permission to start and stop the managed Apps.
 
@@ -155,7 +167,7 @@ Stop: 18:00
 Save
 ```
 
-Saving the form performs a `MERGE` into `platform.app_schedule`. Removing/declining scheduling deletes the row, returning the App to unmanaged status.
+Saving the form performs a `MERGE` into the configured schedule table. Removing/declining scheduling deletes the row, returning the App to unmanaged status.
 
 ## Origin
 
